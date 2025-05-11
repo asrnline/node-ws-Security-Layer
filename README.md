@@ -25,5 +25,5 @@ curl -Ls https://raw.githubusercontent.com/frankiejun/node-ws/refs/heads/main/se
     
 * 温馨提示：READAME.md为说明文件，请不要上传。
 * js混肴地址：https://obfuscator.io
-
+* 感谢 frankiejun: https://github.com/frankiejun
 ## 二次开发：学习需要，不涉及任何违法内容，不承担法律后果，遵守适合当地法律法规的
