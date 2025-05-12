@@ -3,6 +3,7 @@
 ```bash 
 curl -Ls https://raw.githubusercontent.com/asrnline/node-ws-Security-Layer/refs/heads/main/setup.sh | bash -s yourdomain
 ```
+##在系统文件里找到index.js里直接替换
 
 # Node-ws说明
 用于node环境的玩具和容器，基于node三方ws库，集成哪吒探针服务，可自行添加环境变量
