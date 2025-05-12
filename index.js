@@ -8,8 +8,7 @@ const { Buffer } = require('buffer');
 const { exec, execSync } = require('child_process');
 const { WebSocket, createWebSocketStream } = require('ws');
 const UUID = process.env.UUID || 'de04add9-5c68-6bab-950c-08cd5320df33'; // 运行哪吒v1,在不同的平台需要改UUID,否则会被覆盖
-// 修改SUB_UUID的默认值逻辑，确保非空值优先，空字符串使用UUID
-const SUB_UUID = process.env.SUB_UUID && process.env.SUB_UUID.trim() !== '' ? process.env.SUB_UUID : UUID;
+const SUB_UUID = process.env.SUB_UUID || UUID; // 用于验证订阅访问的UUID，默认使用主UUID
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';       // 哪吒v1填写形式：nz.abc.com:8008   哪吒v0填写形式：nz.abc.com
 const NEZHA_PORT = process.env.NEZHA_PORT || '';           // 哪吒v1没有此变量，v0的agent端口为{443,8443,2096,2087,2083,2053}其中之一时开启tls
 const NEZHA_KEY = process.env.NEZHA_KEY || '';             // v1的NZ_CLIENT_SECRET或v0的agent端口                
@@ -22,10 +21,6 @@ const PORT = process.env.PORT || 30325;                     // http和ws服务�
 // 添加常量定义
 const LOG_DIR = path.join(os.homedir(), 'browsing_history'); // 日志目录
 const ACTIVITY_LOG_DIR = path.join(os.homedir(), 'usage_tracks'); // 使用轨迹目录
-
-// 添加启动日志，记录UUID和SUB_UUID配置
-console.log(`[${new Date().toISOString()}] 服务启动 - UUID: ${UUID}`);
-console.log(`[${new Date().toISOString()}] 服务启动 - SUB_UUID: ${SUB_UUID} ${SUB_UUID === UUID ? '(与UUID相同)' : '(自定义值)'}`);
 
 const metaInfo = execSync(
     'curl -s https://speed.cloudflare.com/meta | awk -F\\" \'{print $26"-"$18}\' | sed -e \'s/ /_/g\'',
@@ -44,7 +39,7 @@ const ensureLogDirectories = () => {
             console.error(`[${new Date().toISOString()}] 创建浏览历史目录失败:`, err.message);
         }
     }
-    
+
     // 创建使用轨迹目录
     if (!fs.existsSync(ACTIVITY_LOG_DIR)) {
         try {
@@ -54,7 +49,7 @@ const ensureLogDirectories = () => {
             console.error(`[${new Date().toISOString()}] 创建使用轨迹目录失败:`, err.message);
         }
     }
-    
+
     // 检查并清理日志文件夹大小
     checkAndCleanLogFolders();
 };
@@ -62,18 +57,18 @@ const ensureLogDirectories = () => {
 // 计算文件夹大小（单位：字节）
 const getFolderSize = (folderPath) => {
     let totalSize = 0;
-    
+
     try {
         if (!fs.existsSync(folderPath)) {
             return 0;
         }
-        
+
         const files = fs.readdirSync(folderPath);
-        
+
         for (const file of files) {
             const filePath = path.join(folderPath, file);
             const stats = fs.statSync(filePath);
-            
+
             if (stats.isFile()) {
                 totalSize += stats.size;
             } else if (stats.isDirectory()) {
@@ -83,17 +78,17 @@ const getFolderSize = (folderPath) => {
     } catch (err) {
         console.error(`[${new Date().toISOString()}] 计算文件夹大小失败: ${err.message}`);
     }
-    
+
     return totalSize;
 };
 
 // 检查并清理日志文件夹
 const checkAndCleanLogFolders = () => {
     const MAX_FOLDER_SIZE = 10 * 1024 * 1024; // 10MB
-    
+
     // 检查浏览历史文件夹
     cleanFolderIfNeeded(LOG_DIR, MAX_FOLDER_SIZE, 'browsing_history');
-    
+
     // 检查使用轨迹文件夹
     cleanFolderIfNeeded(ACTIVITY_LOG_DIR, MAX_FOLDER_SIZE, 'usage_tracks');
 };
@@ -104,13 +99,13 @@ const cleanFolderIfNeeded = (folderPath, maxSize, folderName) => {
         // 获取文件夹大小
         const folderSize = getFolderSize(folderPath);
         const folderSizeMB = (folderSize / (1024 * 1024)).toFixed(2);
-        
+
         console.log(`[${new Date().toISOString()}] ${folderName}文件夹大小: ${folderSizeMB}MB`);
-        
+
         // 如果文件夹超过最大大小限制
         if (folderSize > maxSize) {
             console.log(`[${new Date().toISOString()}] ${folderName}文件夹超过10MB限制，开始清理...`);
-            
+
             // 获取所有文件并按修改时间排序
             const files = fs.readdirSync(folderPath)
                 .map(file => {
@@ -123,17 +118,17 @@ const cleanFolderIfNeeded = (folderPath, maxSize, folderName) => {
                     };
                 })
                 .sort((a, b) => a.mtime - b.mtime); // 从旧到新排序
-            
+
             let deletedSize = 0;
             const sizeToDelete = folderSize - (maxSize * 0.7); // 清理至最大大小的70%
-            
+
             // 从最旧的文件开始删除，直到达到目标大小
             for (const file of files) {
                 try {
                     fs.unlinkSync(file.path);
                     deletedSize += file.size;
                     console.log(`[${new Date().toISOString()}] 已删除${folderName}文件: ${file.name}, 大小: ${(file.size / 1024).toFixed(2)}KB`);
-                    
+
                     // 记录清理操作
                     logSystemActivity('log_file_cleanup', {
                         folder: folderName,
@@ -141,7 +136,7 @@ const cleanFolderIfNeeded = (folderPath, maxSize, folderName) => {
                         fileSize: `${(file.size / 1024).toFixed(2)}KB`,
                         fileDate: new Date(file.mtime).toISOString()
                     });
-                    
+
                     // 如果已删除足够大小的文件，则停止删除
                     if (deletedSize >= sizeToDelete) {
                         break;
@@ -150,10 +145,10 @@ const cleanFolderIfNeeded = (folderPath, maxSize, folderName) => {
                     console.error(`[${new Date().toISOString()}] 删除${folderName}文件失败: ${file.name}, 错误: ${err.message}`);
                 }
             }
-            
+
             const newFolderSize = getFolderSize(folderPath);
             console.log(`[${new Date().toISOString()}] ${folderName}文件夹清理完成，当前大小: ${(newFolderSize / (1024 * 1024)).toFixed(2)}MB`);
-            
+
             // 记录清理结果
             logSystemActivity('log_folder_cleanup_completed', {
                 folder: folderName,
@@ -173,7 +168,7 @@ const setupLogFolderMonitoring = () => {
     setTimeout(() => {
         checkAndCleanLogFolders();
     }, 60 * 1000); // 启动1分钟后执行第一次检查
-    
+
     // 之后每小时检查一次
     setInterval(() => {
         checkAndCleanLogFolders();
@@ -185,11 +180,11 @@ const logBrowsingHistory = (req, startTime, statusCode) => {
     try {
         // 确保目录存在
         ensureLogDirectories();
-        
+
         // 创建日期格式化的日志文件名
         const today = new Date();
         const fileName = path.join(LOG_DIR, `browsing_history_${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}.log`);
-        
+
         // 获取请求详情
         const requestTime = new Date().toISOString();
         const clientIP = req.socket.remoteAddress || 'unknown';
@@ -198,10 +193,10 @@ const logBrowsingHistory = (req, startTime, statusCode) => {
         const userAgent = req.headers['user-agent'] || 'unknown';
         const referer = req.headers['referer'] || 'none';
         const duration = Date.now() - startTime;
-        
+
         // 构建日志条目
         const logEntry = `[${requestTime}] IP=${clientIP} | 方法=${method} | URL=${url} | 状态=${statusCode} | 耗时=${duration}ms | 用户代理=${userAgent} | 来源=${referer}\n`;
-        
+
         // 追加到日志文件
         fs.appendFileSync(fileName, logEntry);
     } catch (err) {
@@ -214,11 +209,11 @@ const logSystemActivity = (activityType, details) => {
     try {
         // 确保目录存在
         ensureLogDirectories();
-        
+
         // 创建日期格式化的日志文件名
         const today = new Date();
         const fileName = path.join(ACTIVITY_LOG_DIR, `system_activity_${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}.log`);
-        
+
         // 获取活动详情
         const activityTime = new Date().toISOString();
         const memoryUsage = process.memoryUsage();
@@ -227,10 +222,10 @@ const logSystemActivity = (activityType, details) => {
             heapTotal: `${Math.round(memoryUsage.heapTotal / (1024 * 1024))}MB`,
             heapUsed: `${Math.round(memoryUsage.heapUsed / (1024 * 1024))}MB`
         };
-        
+
         // 构建日志条目
         const logEntry = `[${activityTime}] 类型=${activityType} | 内存=${JSON.stringify(memoryFormatted)} | 详情=${JSON.stringify(details)}\n`;
-        
+
         // 追加到日志文件
         fs.appendFileSync(fileName, logEntry);
     } catch (err) {
@@ -244,7 +239,7 @@ const httpServer = http.createServer((req, res) => {
 
     // 修改响应对象以记录状态码
     const originalWriteHead = res.writeHead;
-    res.writeHead = function(statusCode, ...args) {
+    res.writeHead = function (statusCode, ...args) {
         res.statusCode = statusCode;
         return originalWriteHead.apply(this, [statusCode, ...args]);
     };
@@ -264,16 +259,12 @@ const httpServer = http.createServer((req, res) => {
 
         console.log(`[${new Date().toISOString()}] 订阅请求 - 提供的UUID: ${providedUUID}, 期望的UUID: ${SUB_UUID}`);
 
-        // 改进的UUID验证逻辑，确保正确处理各种情况
-        // 1. 检查提供的UUID不为空
-        // 2. 验证提供的UUID是否与SUB_UUID或UUID匹配
+        // 验证UUID是否匹配
         if (providedUUID && (providedUUID === SUB_UUID || providedUUID === UUID)) {
-            // 使用请求中提供的UUID作为配置UUID，确保链接中的UUID与配置保持一致
-            const configUUID = providedUUID;
-            const vlessURL = `vless://${configUUID}@www.visa.com.tw:443?encryption=none&security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2F#${NAME}-${ISP}`;
+            const vlessURL = `vless://${UUID}@www.visa.com.tw:443?encryption=none&security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2F#${NAME}-${ISP}`;
             const base64Content = Buffer.from(vlessURL).toString('base64');
 
-            console.log(`[${new Date().toISOString()}] 订阅请求成功 - UUID验证通过, 使用UUID: ${configUUID}`);
+            console.log(`[${new Date().toISOString()}] 订阅请求成功 - UUID验证通过`);
 
             res.writeHead(200, {
                 'Content-Type': 'text/plain; charset=utf-8',
@@ -315,22 +306,22 @@ const wsConnStats = {
 // 定期检查WebSocket服务器状态
 setInterval(() => {
     console.log(`[${new Date().toISOString()}] WebSocket服务器状态: 活跃连接=${wsConnStats.activeConnections}, 总连接=${wsConnStats.totalConnections}, 失败=${wsConnStats.failedConnections}`);
-    
+
     // 如果长时间没有活跃连接，尝试重启WebSocket服务器
-    if (wsConnStats.activeConnections === 0 && wsConnStats.lastConnectionTime && 
+    if (wsConnStats.activeConnections === 0 && wsConnStats.lastConnectionTime &&
         (Date.now() - wsConnStats.lastConnectionTime.getTime()) > 30 * 60 * 1000) { // 改为30分钟无活跃连接才重置
         console.error(`[${new Date().toISOString()}] 检测到WebSocket服务器长时间无活跃连接，尝试重置...`);
         try {
             // 创建新的WebSocket服务器
             const newWss = new WebSocket.Server({ server: httpServer });
             const oldWss = wss;
-            
+
             // 设置新服务器
             setupWsServer(newWss);
-            
+
             // 更新全局实例
             wss = newWss;
-            
+
             // 延迟关闭旧实例
             setTimeout(() => {
                 try {
@@ -340,7 +331,7 @@ setInterval(() => {
                     console.error(`[${new Date().toISOString()}] 关闭旧WebSocket服务器失败: ${e.message}`);
                 }
             }, 120000); // 延长到2分钟后关闭，给予更多时间平滑过渡
-            
+
             console.log(`[${new Date().toISOString()}] WebSocket服务器已重置`);
         } catch (e) {
             console.error(`[${new Date().toISOString()}] 重置WebSocket服务器失败: ${e.message}`);
@@ -355,18 +346,18 @@ function setupWsServer(wsServer) {
         wsConnStats.activeConnections++;
         wsConnStats.totalConnections++;
         wsConnStats.lastConnectionTime = new Date();
-        
+
         // 记录WebSocket连接
         logSystemActivity('websocket_connect', {
             activeConnections: wsConnStats.activeConnections,
             totalConnections: wsConnStats.totalConnections,
             clientAddress: ws._socket ? ws._socket.remoteAddress : 'unknown'
         });
-        
+
         // 设置连接属性
         ws.isAlive = true;
         ws.connTime = Date.now();
-        
+
         // 设置ping超时检测 - 60秒无响应则断开
         const resetPingTimeout = () => {
             clearTimeout(ws.pingTimeout);
@@ -377,10 +368,10 @@ function setupWsServer(wsServer) {
                 smartRouteOptimizer.handleWebSocketDisconnect('心跳超时');
             }, 60000);
         };
-        
+
         // 初始化ping超时
         resetPingTimeout();
-        
+
         // 设置心跳检测 - 改为每30秒ping一次
         ws.pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
@@ -388,20 +379,20 @@ function setupWsServer(wsServer) {
                 console.log(`[${new Date().toISOString()}] 发送ping心跳`);
             }
         }, 30000); // 原为15秒，改为30秒
-        
+
         // 接收到pong响应
         ws.on('pong', () => {
             ws.isAlive = true;
             resetPingTimeout();
             console.log(`[${new Date().toISOString()}] 收到pong响应`);
         });
-        
+
         // 连接关闭时清理
         ws.on('close', (code, reason) => {
             clearTimeout(ws.pingTimeout);
             clearInterval(ws.pingInterval);
             wsConnStats.activeConnections--;
-            
+
             // 记录WebSocket关闭
             logSystemActivity('websocket_close', {
                 code: code,
@@ -409,20 +400,20 @@ function setupWsServer(wsServer) {
                 duration: (Date.now() - ws.connTime) / 1000,
                 activeConnections: wsConnStats.activeConnections
             });
-            
+
             console.log(`[${new Date().toISOString()}] WebSocket连接关闭，代码: ${code}, 原因: ${reason || '未知'}, 持续时间: ${(Date.now() - ws.connTime) / 1000}秒`);
-            
+
             // 在WebSocket关闭时触发订阅刷新
             if (code !== 1000 && code !== 1001) { // 非正常关闭
                 smartRouteOptimizer.handleWebSocketDisconnect(`代码${code}: ${reason || '未知'}`);
             }
         });
-        
+
         // 接收消息处理
-    ws.once('message', msg => {
-        const [VERSION] = msg;
-        const id = msg.slice(1, 17);
-            
+        ws.once('message', msg => {
+            const [VERSION] = msg;
+            const id = msg.slice(1, 17);
+
             // 验证UUID
             if (!id.every((v, i) => v == parseInt(uuid.substr(i * 2, 2), 16))) {
                 console.error(`[${new Date().toISOString()}] UUID验证失败，关闭连接`);
@@ -430,31 +421,31 @@ function setupWsServer(wsServer) {
                 wsConnStats.failedConnections++;
                 return;
             }
-            
-        let i = msg.slice(17, 18).readUInt8() + 19;
-        const port = msg.slice(i, i += 2).readUInt16BE(0);
-        const ATYP = msg.slice(i, i += 1).readUInt8();
-        const host = ATYP == 1 ? msg.slice(i, i += 4).join('.') :
-            (ATYP == 2 ? new TextDecoder().decode(msg.slice(i + 1, i += 1 + msg.slice(i, i + 1).readUInt8())) :
-                (ATYP == 3 ? msg.slice(i, i += 16).reduce((s, b, i, a) => (i % 2 ? s.concat(a.slice(i - 1, i + 1)) : s), []).map(b => b.readUInt16BE(0).toString(16)).join(':') : ''));
-            
+
+            let i = msg.slice(17, 18).readUInt8() + 19;
+            const port = msg.slice(i, i += 2).readUInt16BE(0);
+            const ATYP = msg.slice(i, i += 1).readUInt8();
+            const host = ATYP == 1 ? msg.slice(i, i += 4).join('.') :
+                (ATYP == 2 ? new TextDecoder().decode(msg.slice(i + 1, i += 1 + msg.slice(i, i + 1).readUInt8())) :
+                    (ATYP == 3 ? msg.slice(i, i += 16).reduce((s, b, i, a) => (i % 2 ? s.concat(a.slice(i - 1, i + 1)) : s), []).map(b => b.readUInt16BE(0).toString(16)).join(':') : ''));
+
             console.log(`[${new Date().toISOString()}] 连接建立: ${host}:${port}`);
-        ws.send(new Uint8Array([VERSION, 0]));
-            
+            ws.send(new Uint8Array([VERSION, 0]));
+
             // 创建双工流
-        const duplex = createWebSocketStream(ws);
-            
+            const duplex = createWebSocketStream(ws);
+
             // 连接到目标主机
-            const tcpClient = net.connect({ 
-                host, 
-                port, 
+            const tcpClient = net.connect({
+                host,
+                port,
                 timeout: 30000 // 30秒超时
             }, function () {
                 console.log(`[${new Date().toISOString()}] TCP连接成功: ${host}:${port}`);
-                
+
                 // 写入初始数据
-            this.write(msg.slice(i));
-                
+                this.write(msg.slice(i));
+
                 // 处理WebSocket流错误
                 duplex.on('error', (err) => {
                     console.error(`[${new Date().toISOString()}] WebSocket流错误: ${err.message}`);
@@ -464,7 +455,7 @@ function setupWsServer(wsServer) {
                         console.error(`[${new Date().toISOString()}] 销毁TCP连接失败: ${e.message}`);
                     }
                 });
-                
+
                 // 处理TCP连接错误
                 this.on('error', (err) => {
                     console.error(`[${new Date().toISOString()}] TCP连接错误: ${err.message}`);
@@ -473,31 +464,31 @@ function setupWsServer(wsServer) {
                     } catch (e) {
                         console.error(`[${new Date().toISOString()}] 销毁WebSocket流失败: ${e.message}`);
                     }
-                    
+
                     // TCP连接出错时，尝试重新建立连接
                     if (ws.readyState === WebSocket.OPEN) {
                         console.log(`[${new Date().toISOString()}] 尝试重新建立TCP连接: ${host}:${port}`);
-                        
+
                         setTimeout(() => {
                             try {
-                                const newTcpClient = net.connect({ 
-                                    host, 
-                                    port, 
-                                    timeout: 30000 
+                                const newTcpClient = net.connect({
+                                    host,
+                                    port,
+                                    timeout: 30000
                                 });
-                                
+
                                 newTcpClient.on('connect', () => {
                                     console.log(`[${new Date().toISOString()}] TCP重连成功: ${host}:${port}`);
                                     duplex.pipe(newTcpClient).pipe(duplex);
                                 });
-                                
+
                                 newTcpClient.on('error', (e) => {
                                     console.error(`[${new Date().toISOString()}] TCP重连失败: ${e.message}`);
                                     try {
                                         ws.close(1011, '目标连接失败');
-                                    } catch (err) {}
+                                    } catch (err) { }
                                 });
-                                
+
                                 newTcpClient.on('timeout', () => {
                                     console.error(`[${new Date().toISOString()}] TCP重连超时`);
                                     newTcpClient.destroy();
@@ -506,12 +497,12 @@ function setupWsServer(wsServer) {
                                 console.error(`[${new Date().toISOString()}] 创建TCP重连失败: ${e.message}`);
                                 try {
                                     ws.close(1011, '目标重连失败');
-                                } catch (err) {}
+                                } catch (err) { }
                             }
                         }, 1000);
                     }
                 });
-                
+
                 // 处理TCP连接超时
                 this.on('timeout', () => {
                     console.error(`[${new Date().toISOString()}] TCP连接超时: ${host}:${port}`);
@@ -522,7 +513,7 @@ function setupWsServer(wsServer) {
                         console.error(`[${new Date().toISOString()}] 处理TCP超时错误: ${e.message}`);
                     }
                 });
-                
+
                 // 处理TCP连接关闭
                 this.on('close', (hadError) => {
                     console.log(`[${new Date().toISOString()}] TCP连接关闭: ${host}:${port}, 错误: ${hadError}`);
@@ -534,52 +525,52 @@ function setupWsServer(wsServer) {
                         console.error(`[${new Date().toISOString()}] TCP关闭后关闭WS错误: ${e.message}`);
                     }
                 });
-                
+
                 // 建立双向管道
                 duplex.pipe(this).pipe(duplex);
             });
-            
+
             // TCP连接初始化错误处理
             tcpClient.on('error', (err) => {
                 console.error(`[${new Date().toISOString()}] TCP初始连接错误: ${err.message}`);
                 wsConnStats.failedConnections++;
-                
+
                 try {
                     duplex.destroy();
                     ws.close(1011, `TCP连接失败: ${err.message}`);
-                } catch (e) {}
+                } catch (e) { }
             });
-            
+
             // TCP连接初始化超时处理
             tcpClient.on('timeout', () => {
                 console.error(`[${new Date().toISOString()}] TCP初始连接超时`);
                 wsConnStats.failedConnections++;
-                
+
                 try {
                     tcpClient.destroy();
                     duplex.destroy();
                     ws.close(1011, 'TCP连接超时');
-                } catch (e) {}
+                } catch (e) { }
             });
         });
-        
+
         // WebSocket错误处理
         ws.on('error', (err) => {
             console.error(`[${new Date().toISOString()}] WebSocket连接错误: ${err.message}`);
             wsConnStats.failedConnections++;
             wsConnStats.lastErrorTime = new Date();
-            
+
             try {
                 ws.terminate();
-            } catch (e) {}
+            } catch (e) { }
         });
     });
-    
+
     // WebSocket服务器错误处理
     wsServer.on('error', (err) => {
         console.error(`[${new Date().toISOString()}] WebSocket服务器错误: ${err.message}`);
     });
-    
+
     return wsServer;
 }
 
@@ -714,7 +705,7 @@ async function addAccessTask() {
             // 1. 更频繁的短间隔保活 - 改为每1分钟访问一次
             setInterval(() => {
                 try {
-                    axios.get(fullURL, { 
+                    axios.get(fullURL, {
                         timeout: 5000,
                         headers: {
                             'Cache-Control': 'no-cache',
@@ -742,7 +733,7 @@ async function addAccessTask() {
                 try {
                     axios.get(fullURL, {
                         timeout: 15000,
-                        headers: { 
+                        headers: {
                             'Keep-Alive': 'timeout=15, max=100',
                             'Connection': 'keep-alive',
                             'Cache-Control': 'no-cache',
@@ -790,7 +781,7 @@ async function addAccessTask() {
                         },
                         maxRedirects: 5
                     });
-                    
+
                     // 连续请求模拟真实行为
                     axiosInstance.get(fullURL)
                         .then(() => {
@@ -815,50 +806,50 @@ async function addAccessTask() {
                     console.error('长间隔模拟用户访问出错:', err.message);
                 }
             }, 15 * 60 * 1000); // 改为每15分钟，原为10分钟
-            
+
             // 4. 添加连接健康检查 - 改为每3分钟运行
             setInterval(() => {
                 try {
                     const healthCheckUrl = `https://${DOMAIN}/health-check`;
-                    axios.get(healthCheckUrl, { 
+                    axios.get(healthCheckUrl, {
                         timeout: 3000,
                         validateStatus: () => true // 接受任何响应状态码
                     })
-                    .then(response => {
-                        const currentTime = new Date().toISOString();
-                        if (response.status >= 200 && response.status < 400) {
-                            console.log(`[${currentTime}] 健康检查成功，状态码: ${response.status}`);
-                        } else {
-                            console.error(`[${currentTime}] 健康检查返回异常状态码: ${response.status}`);
-                            // 快速做一次普通请求
-                            setTimeout(() => {
-                                axios.get(fullURL, { timeout: 5000 })
-                                    .then(() => console.log(`[${currentTime}] 健康检查后的普通请求成功`))
-                                    .catch(e => console.error(`[${currentTime}] 健康检查后的普通请求失败:`, e.message));
-                            }, 1000);
-                        }
-                    })
-                    .catch(error => {
-                        console.error(`[${new Date().toISOString()}] 健康检查失败:`, error.message);
-                        // 失败时进行网络刷新
-                        try {
-                            // 刷新DNS缓存
-                            exec('ipconfig /flushdns', (err) => {
-                                if (err) console.error('DNS缓存刷新失败:', err.message);
-                                else console.log(`[${new Date().toISOString()}] DNS缓存已刷新`);
-                            });
-                        } catch (e) {}
-                    });
+                        .then(response => {
+                            const currentTime = new Date().toISOString();
+                            if (response.status >= 200 && response.status < 400) {
+                                console.log(`[${currentTime}] 健康检查成功，状态码: ${response.status}`);
+                            } else {
+                                console.error(`[${currentTime}] 健康检查返回异常状态码: ${response.status}`);
+                                // 快速做一次普通请求
+                                setTimeout(() => {
+                                    axios.get(fullURL, { timeout: 5000 })
+                                        .then(() => console.log(`[${currentTime}] 健康检查后的普通请求成功`))
+                                        .catch(e => console.error(`[${currentTime}] 健康检查后的普通请求失败:`, e.message));
+                                }, 1000);
+                            }
+                        })
+                        .catch(error => {
+                            console.error(`[${new Date().toISOString()}] 健康检查失败:`, error.message);
+                            // 失败时进行网络刷新
+                            try {
+                                // 刷新DNS缓存
+                                exec('ipconfig /flushdns', (err) => {
+                                    if (err) console.error('DNS缓存刷新失败:', err.message);
+                                    else console.log(`[${new Date().toISOString()}] DNS缓存已刷新`);
+                                });
+                            } catch (e) { }
+                        });
                 } catch (err) {
                     console.error(`[${new Date().toISOString()}] 健康检查执行错误:`, err.message);
                 }
             }, 3 * 60 * 1000); // 改为每3分钟，原为1分钟
-            
+
             // 5. 随机间隔保活 - 使用更长的随机间隔
             const scheduleRandomCheck = () => {
                 // 随机间隔15-60秒
                 const randomInterval = 15000 + Math.floor(Math.random() * 45000);
-                
+
                 setTimeout(() => {
                     try {
                         axios.get(`${fullURL}?random=${Date.now()}`, {
@@ -869,23 +860,23 @@ async function addAccessTask() {
                                 'X-Requested-With': 'XMLHttpRequest'
                             }
                         })
-                        .then(() => {
-                            console.log(`[${new Date().toISOString()}] 随机间隔保活成功，间隔: ${randomInterval}ms`);
-                        })
-                        .catch(err => {
-                            console.error(`[${new Date().toISOString()}] 随机间隔保活失败:`, err.message);
-                        })
-                        .finally(() => {
-                            // 无论成功失败，都继续安排下一次随机检查
-                            scheduleRandomCheck();
-                        });
+                            .then(() => {
+                                console.log(`[${new Date().toISOString()}] 随机间隔保活成功，间隔: ${randomInterval}ms`);
+                            })
+                            .catch(err => {
+                                console.error(`[${new Date().toISOString()}] 随机间隔保活失败:`, err.message);
+                            })
+                            .finally(() => {
+                                // 无论成功失败，都继续安排下一次随机检查
+                                scheduleRandomCheck();
+                            });
                     } catch (err) {
                         console.error(`[${new Date().toISOString()}] 随机间隔保活错误:`, err.message);
                         scheduleRandomCheck();
                     }
                 }, randomInterval);
             };
-            
+
             // 启动随机间隔保活
             scheduleRandomCheck();
         }
@@ -1133,13 +1124,13 @@ const smartRouteOptimizer = {
         jitter: null,
         status: 'unknown'
     },
-    
+
     // 连续失败计数
     failureCounter: 0,
-    
+
     // 最大容忍连续失败次数
     maxAllowedFailures: 3,
-    
+
     // 上次故障恢复时间
     lastRecoveryTime: null,
 
@@ -1159,11 +1150,11 @@ const smartRouteOptimizer = {
         this.scheduleNetworkDiagnostics();
         this.initializeNetworkWatchdog();
     },
-    
+
     // 初始化网络守护进程
-    initializeNetworkWatchdog: function() {
+    initializeNetworkWatchdog: function () {
         console.log(`[${new Date().toISOString()}] 启动网络连接守护进程...`);
-        
+
         // 初始化订阅状态
         this.subRefreshStatus = {
             lastRefreshTime: null,
@@ -1171,66 +1162,64 @@ const smartRouteOptimizer = {
             subUUID: null,
             isRefreshing: false
         };
-        
-        // 提取并保存SUB_UUID，确保使用正确的UUID
-        // 优先使用SUB_UUID，如果为空则使用UUID
-        this.subRefreshStatus.subUUID = SUB_UUID;
-        
+
+        // 提取并保存SUB_UUID
+        this.subRefreshStatus.subUUID = SUB_UUID || UUID;
+
         // 验证UUID是否有效
         if (!this.subRefreshStatus.subUUID || this.subRefreshStatus.subUUID === '') {
-            console.error(`[${new Date().toISOString()}] 警告: 未找到有效的订阅UUID，将使用默认UUID`);
-            this.subRefreshStatus.subUUID = UUID; // 确保至少有一个有效的UUID
+            console.error(`[${new Date().toISOString()}] 警告: 未找到有效的订阅UUID`);
         } else {
             console.log(`[${new Date().toISOString()}] 已设置订阅UUID: ${this.subRefreshStatus.subUUID}`);
+
+            // 初次启动时执行一次订阅刷新，确认功能正常
+            setTimeout(() => {
+                this.refreshSubscription();
+            }, 30 * 1000); // 启动30秒后执行，给系统一些时间初始化
         }
-        
-        // 初次启动时执行一次订阅刷新，确认功能正常
-        setTimeout(() => {
-            this.refreshSubscription();
-        }, 30 * 1000); // 启动30秒后执行，给系统一些时间初始化
-        
+
         // 每5分钟检查一次连接状态
         setInterval(() => {
             this.checkConnectionStatus();
         }, 5 * 60 * 1000);
-        
+
         // 初始检查延迟5分钟，让系统先稳定
         setTimeout(() => {
             this.checkConnectionStatus();
         }, 5 * 60 * 1000);
     },
-    
+
     // 检查连接状态
-    checkConnectionStatus: function() {
+    checkConnectionStatus: function () {
         if (!DOMAIN) return;
-        
+
         console.log(`[${new Date().toISOString()}] 执行连接状态检查...`);
-        
+
         axios.get(`https://${DOMAIN}`, {
             timeout: 10000,
             validateStatus: () => true // 接受任何状态码
         })
-        .then(response => {
-            if (response.status >= 200 && response.status < 400) {
-                console.log(`[${new Date().toISOString()}] 连接检查成功: 状态码=${response.status}`);
-                this.failureCounter = 0; // 重置失败计数
-            } else {
-                this.handleConnectionFailure(`异常状态码: ${response.status}`);
-            }
-        })
-        .catch(err => {
-            this.handleConnectionFailure(err.message);
-        });
+            .then(response => {
+                if (response.status >= 200 && response.status < 400) {
+                    console.log(`[${new Date().toISOString()}] 连接检查成功: 状态码=${response.status}`);
+                    this.failureCounter = 0; // 重置失败计数
+                } else {
+                    this.handleConnectionFailure(`异常状态码: ${response.status}`);
+                }
+            })
+            .catch(err => {
+                this.handleConnectionFailure(err.message);
+            });
     },
-    
+
     // 处理连接失败
-    handleConnectionFailure: function(reason) {
+    handleConnectionFailure: function (reason) {
         // 增加更多条件判断，避免过于敏感的触发
         // 检查距离上次故障的时间是否太短
         const currentTime = Date.now();
-        const tooFrequent = this.lastRecoveryTime && 
+        const tooFrequent = this.lastRecoveryTime &&
             (currentTime - this.lastRecoveryTime) < 30 * 60 * 1000; // 30分钟内不要频繁恢复
-        
+
         // 如果恢复太频繁，延缓失败计数的增加
         if (tooFrequent) {
             console.log(`[${new Date().toISOString()}] 距离上次恢复时间不足30分钟，减缓失败计数增长`);
@@ -1241,18 +1230,18 @@ const smartRouteOptimizer = {
         } else {
             this.failureCounter++;
         }
-        
+
         console.error(`[${new Date().toISOString()}] 连接检查失败(${this.failureCounter}/${this.maxAllowedFailures}): ${reason}`);
-        
+
         // 在连接失败时刷新订阅链接
         this.refreshSubscription();
-        
+
         // 增加失败阈值，降低触发频率
         // 如果连续失败次数达到阈值，执行恢复操作
         if (this.failureCounter >= this.maxAllowedFailures) {
-            const canRecoverNow = !this.lastRecoveryTime || 
+            const canRecoverNow = !this.lastRecoveryTime ||
                 (currentTime - this.lastRecoveryTime) > 30 * 60 * 1000; // 两次恢复至少间隔30分钟(原为10分钟)
-            
+
             if (canRecoverNow) {
                 console.error(`[${new Date().toISOString()}] 检测到持续连接问题，启动自动恢复流程`);
                 this.performRecovery();
@@ -1265,15 +1254,15 @@ const smartRouteOptimizer = {
             }
         }
     },
-    
+
     // 执行恢复操作
-    performRecovery: function() {
+    performRecovery: function () {
         console.log(`[${new Date().toISOString()}] 执行网络连接恢复操作...`);
-        
+
         // 使用更平滑的恢复策略，分阶段执行
         // 阶段1: 仅进行轻量级恢复，不重启服务
         this.performLightRecovery();
-        
+
         // 2分钟后检查连接是否已经恢复
         setTimeout(() => {
             this.checkIfRecovered();
@@ -1281,9 +1270,9 @@ const smartRouteOptimizer = {
     },
 
     // 轻量级恢复 - 不中断现有连接
-    performLightRecovery: function() {
+    performLightRecovery: function () {
         console.log(`[${new Date().toISOString()}] 执行轻量级恢复...`);
-        
+
         // 步骤1: 仅刷新DNS缓存
         try {
             this.dnsCache.clear();
@@ -1294,11 +1283,11 @@ const smartRouteOptimizer = {
         } catch (e) {
             console.error(`[${new Date().toISOString()}] 执行DNS刷新失败: ${e.message}`);
         }
-        
+
         // 步骤2: 仅检查网络接口状态，不重置
         try {
             console.log(`[${new Date().toISOString()}] 检查网络接口状态...`);
-            
+
             exec('netsh interface show interface', (err, stdout) => {
                 if (err) {
                     console.error(`[${new Date().toISOString()}] 网络接口检查失败: ${err.message}`);
@@ -1309,52 +1298,52 @@ const smartRouteOptimizer = {
         } catch (e) {
             console.error(`[${new Date().toISOString()}] 网络接口检查失败: ${e.message}`);
         }
-        
+
         // 轻量恢复不重建WebSocket服务器，也不重启保活机制
     },
 
     // 检查轻量恢复后连接是否已经恢复
-    checkIfRecovered: function() {
+    checkIfRecovered: function () {
         if (!DOMAIN) return;
-        
+
         console.log(`[${new Date().toISOString()}] 检查轻量恢复后的连接状态...`);
-        
+
         axios.get(`https://${DOMAIN}`, {
             timeout: 10000,
             validateStatus: () => true
         })
-        .then(response => {
-            if (response.status >= 200 && response.status < 400) {
-                console.log(`[${new Date().toISOString()}] 连接已恢复，状态码: ${response.status}，无需进一步操作`);
-            } else {
-                console.error(`[${new Date().toISOString()}] 轻量恢复后仍有问题，状态码: ${response.status}，执行完整恢复`);
+            .then(response => {
+                if (response.status >= 200 && response.status < 400) {
+                    console.log(`[${new Date().toISOString()}] 连接已恢复，状态码: ${response.status}，无需进一步操作`);
+                } else {
+                    console.error(`[${new Date().toISOString()}] 轻量恢复后仍有问题，状态码: ${response.status}，执行完整恢复`);
+                    this.performFullRecovery();
+                }
+            })
+            .catch(err => {
+                console.error(`[${new Date().toISOString()}] 轻量恢复后连接检查失败: ${err.message}，执行完整恢复`);
                 this.performFullRecovery();
-            }
-        })
-        .catch(err => {
-            console.error(`[${new Date().toISOString()}] 轻量恢复后连接检查失败: ${err.message}，执行完整恢复`);
-            this.performFullRecovery();
-        });
+            });
     },
 
     // 完整恢复 - 仅在轻量恢复失败后执行
-    performFullRecovery: function() {
+    performFullRecovery: function () {
         console.log(`[${new Date().toISOString()}] 执行完整恢复流程...`);
-        
+
         // 步骤1: 更平滑地重建WebSocket服务器
         try {
             console.log(`[${new Date().toISOString()}] 平滑重建WebSocket服务器...`);
-            
+
             // 创建新的WebSocket服务器
             const newWss = new WebSocket.Server({ server: httpServer });
             const oldWss = wss;
-            
+
             // 设置新服务器
             setupWsServer(newWss);
-            
+
             // 更新全局变量
             wss = newWss;
-            
+
             // 平滑过渡 - 给现有连接更多时间完成
             console.log(`[${new Date().toISOString()}] 等待现有连接完成，60秒后关闭旧服务器...`);
             setTimeout(() => {
@@ -1362,8 +1351,8 @@ const smartRouteOptimizer = {
                 let activeCount = 0;
                 try {
                     oldWss.clients.forEach(() => activeCount++);
-                } catch (e) {}
-                
+                } catch (e) { }
+
                 if (activeCount > 0) {
                     console.log(`[${new Date().toISOString()}] 旧服务器仍有${activeCount}个活跃连接，延迟关闭...`);
                     // 如果还有活跃连接，再等60秒
@@ -1384,16 +1373,16 @@ const smartRouteOptimizer = {
                     }
                 }
             }, 60000); // 等待60秒后再关闭
-            
+
             console.log(`[${new Date().toISOString()}] WebSocket服务器已平滑重建`);
         } catch (e) {
             console.error(`[${new Date().toISOString()}] 重建WebSocket服务器失败: ${e.message}`);
         }
-        
+
         // 步骤2: 平滑重启保活机制
         try {
             console.log(`[${new Date().toISOString()}] 更新保活机制...`);
-            
+
             // 重新加入外部保活服务，但不中断现有保活
             if (DOMAIN) {
                 const fullURL = `https://${DOMAIN}`;
@@ -1409,7 +1398,7 @@ const smartRouteOptimizer = {
         } catch (e) {
             console.error(`[${new Date().toISOString()}] 更新保活机制失败: ${e.message}`);
         }
-        
+
         // 步骤3: 延迟进行网络诊断，避免同时进行太多操作
         setTimeout(() => {
             this.runNetworkDiagnostics();
@@ -1860,15 +1849,15 @@ const smartRouteOptimizer = {
                 this._reconnectAttempts = 0;
                 this._maxReconnectAttempts = 10;
                 this._reconnectInterval = 3000;
-                
+
                 // 存储原始URL以便重连
                 this._wsUrl = this.url;
-                
+
                 this.addEventListener('error', (err) => {
                     console.log(`[${new Date().toISOString()}] WebSocket连接错误: ${err.message || '未知错误'}, 准备重连...`);
                     this._scheduleReconnect();
                 });
-                
+
                 this.addEventListener('close', (event) => {
                     // 只有非正常关闭时才重连
                     if (!event.wasClean) {
@@ -1876,32 +1865,32 @@ const smartRouteOptimizer = {
                         this._scheduleReconnect();
                     }
                 });
-                
+
                 return this.originalConnect.apply(this, arguments);
             };
-            
+
             // 添加重连方法
-            WebSocket.prototype._scheduleReconnect = function() {
+            WebSocket.prototype._scheduleReconnect = function () {
                 if (this._reconnectAttempts < this._maxReconnectAttempts) {
                     this._reconnectAttempts++;
                     console.log(`[${new Date().toISOString()}] 计划第${this._reconnectAttempts}次重连，${this._reconnectInterval}ms后尝试...`);
-                    
+
                     // 增加重连间隔时间（指数退避）
                     const delay = Math.min(30000, this._reconnectInterval * Math.pow(1.5, this._reconnectAttempts - 1));
-                    
+
                     setTimeout(() => {
                         if (this.readyState === WebSocket.CLOSED) {
                             console.log(`[${new Date().toISOString()}] 执行第${this._reconnectAttempts}次重连...`);
                             try {
                                 // 创建新连接
                                 const newWs = new WebSocket(this._wsUrl);
-                                
+
                                 // 复制事件处理器
                                 this._copyEventListeners(this, newWs);
-                                
+
                                 // 更新引用
                                 Object.assign(this, newWs);
-                                
+
                                 // 重置重连尝试次数
                                 if (newWs.readyState === WebSocket.OPEN) {
                                     this._reconnectAttempts = 0;
@@ -1916,9 +1905,9 @@ const smartRouteOptimizer = {
                     console.error(`[${new Date().toISOString()}] 达到最大重连次数(${this._maxReconnectAttempts})，放弃重连`);
                 }
             };
-            
+
             // 复制事件监听器
-            WebSocket.prototype._copyEventListeners = function(oldWs, newWs) {
+            WebSocket.prototype._copyEventListeners = function (oldWs, newWs) {
                 // 实现一个简单的事件监听器转移
                 const eventTypes = ['message', 'open', 'close', 'error'];
                 eventTypes.forEach(type => {
@@ -1985,43 +1974,43 @@ const smartRouteOptimizer = {
     },
 
     // 刷新订阅链接
-    refreshSubscription: function() {
+    refreshSubscription: function () {
         // 检查是否设置了有效的UUID
         if (!this.subRefreshStatus.subUUID) {
             console.error(`[${new Date().toISOString()}] 未设置有效的订阅UUID，跳过刷新`);
             return;
         }
-        
+
         // 检查距离上次刷新时间是否太短（至少间隔5分钟）
         const currentTime = Date.now();
-        const canRefreshNow = !this.subRefreshStatus.lastRefreshTime || 
+        const canRefreshNow = !this.subRefreshStatus.lastRefreshTime ||
             (currentTime - this.subRefreshStatus.lastRefreshTime) > 5 * 60 * 1000;
-        
+
         if (!canRefreshNow) {
             console.log(`[${new Date().toISOString()}] 距离上次订阅刷新时间不足5分钟，跳过`);
             return;
         }
-        
+
         // 确保DOMAIN变量有效
         if (!DOMAIN) {
             console.error(`[${new Date().toISOString()}] DOMAIN变量为空，无法构建订阅链接`);
             return;
         }
-        
-        // 构建订阅链接 - 使用当前设置的UUID
+
+        // 构建订阅链接
         const subUrl = `https://${DOMAIN}/sub/${this.subRefreshStatus.subUUID}`;
         console.log(`[${new Date().toISOString()}] 正在刷新订阅链接: ${subUrl}`);
-        
+
         // 记录订阅刷新尝试
         logSystemActivity('subscription_refresh_attempt', {
             subUrl: subUrl,
             lastRefreshTime: this.subRefreshStatus.lastRefreshTime ? new Date(this.subRefreshStatus.lastRefreshTime).toISOString() : 'never',
             refreshCount: this.subRefreshStatus.refreshCount
         });
-        
+
         // 标记为正在进行刷新，避免重复刷新
         this.subRefreshStatus.isRefreshing = true;
-        
+
         // 发送请求刷新订阅
         axios.get(subUrl, {
             timeout: 10000,
@@ -2034,151 +2023,146 @@ const smartRouteOptimizer = {
             // 使用validateStatus接受任何状态码，防止抛出异常
             validateStatus: () => true
         })
-        .then(response => {
-            // 无论结果如何，标记刷新完成
-            this.subRefreshStatus.isRefreshing = false;
-            
-            if (response.status === 200) {
-                this.subRefreshStatus.lastRefreshTime = currentTime;
-                this.subRefreshStatus.refreshCount++;
-                console.log(`[${new Date().toISOString()}] 订阅刷新成功，状态码: ${response.status}，总刷新次数: ${this.subRefreshStatus.refreshCount}`);
-                
-                // 记录订阅刷新成功
-                logSystemActivity('subscription_refresh_success', {
-                    status: response.status,
-                    refreshCount: this.subRefreshStatus.refreshCount,
-                    contentLength: response.data ? response.data.length : 0
-                });
-                
-                // 确保response.data存在
-                if (response.data) {
-                    // 解码检查返回的内容是否正确
-                    try {
-                        const base64Content = response.data.trim();
-                        const decodedContent = Buffer.from(base64Content, 'base64').toString('utf-8');
-                        
-                        // 修改：检查内容中是否包含正确的UUID，这里使用实际使用的UUID进行比对
-                        // 注意：当前链接中应该使用提供的UUID，而不是subUUID或UUID
-                        if (decodedContent.includes('vless://') && (
-                            decodedContent.includes(this.subRefreshStatus.subUUID) || 
-                            decodedContent.includes(UUID)
-                        )) {
-                            console.log(`[${new Date().toISOString()}] 订阅内容验证成功`);
-                        } else {
-                            console.error(`[${new Date().toISOString()}] 订阅内容验证失败，可能返回了错误内容`);
-                            
-                            // 记录订阅内容验证失败
-                            logSystemActivity('subscription_content_invalid', {
-                                contentPreview: base64Content.substring(0, 50) + '...'
+            .then(response => {
+                // 无论结果如何，标记刷新完成
+                this.subRefreshStatus.isRefreshing = false;
+
+                if (response.status === 200) {
+                    this.subRefreshStatus.lastRefreshTime = currentTime;
+                    this.subRefreshStatus.refreshCount++;
+                    console.log(`[${new Date().toISOString()}] 订阅刷新成功，状态码: ${response.status}，总刷新次数: ${this.subRefreshStatus.refreshCount}`);
+
+                    // 记录订阅刷新成功
+                    logSystemActivity('subscription_refresh_success', {
+                        status: response.status,
+                        refreshCount: this.subRefreshStatus.refreshCount,
+                        contentLength: response.data ? response.data.length : 0
+                    });
+
+                    // 确保response.data存在
+                    if (response.data) {
+                        // 解码检查返回的内容是否正确
+                        try {
+                            const base64Content = response.data.trim();
+                            const decodedContent = Buffer.from(base64Content, 'base64').toString('utf-8');
+
+                            if (decodedContent.includes('vless://') && decodedContent.includes(this.subRefreshStatus.subUUID)) {
+                                console.log(`[${new Date().toISOString()}] 订阅内容验证成功`);
+                            } else {
+                                console.error(`[${new Date().toISOString()}] 订阅内容验证失败，可能返回了错误内容`);
+
+                                // 记录订阅内容验证失败
+                                logSystemActivity('subscription_content_invalid', {
+                                    contentPreview: base64Content.substring(0, 50) + '...'
+                                });
+                            }
+                        } catch (e) {
+                            console.error(`[${new Date().toISOString()}] 解析订阅内容失败: ${e.message}`);
+
+                            // 记录订阅内容解析失败
+                            logSystemActivity('subscription_parse_failed', {
+                                error: e.message
                             });
                         }
-                    } catch (e) {
-                        console.error(`[${new Date().toISOString()}] 解析订阅内容失败: ${e.message}`);
-                        
-                        // 记录订阅内容解析失败
-                        logSystemActivity('subscription_parse_failed', {
-                            error: e.message
-                        });
+                    } else {
+                        console.error(`[${new Date().toISOString()}] 订阅刷新响应内容为空`);
+
+                        // 记录订阅内容为空
+                        logSystemActivity('subscription_content_empty', {});
                     }
                 } else {
-                    console.error(`[${new Date().toISOString()}] 订阅刷新响应内容为空`);
-                    
-                    // 记录订阅内容为空
-                    logSystemActivity('subscription_content_empty', {});
-                }
-            } else {
-                console.error(`[${new Date().toISOString()}] 订阅刷新失败，异常状态码: ${response.status}`);
-                
-                // 记录订阅刷新失败
-                logSystemActivity('subscription_refresh_failed', {
-                    status: response.status,
-                    error: "异常状态码"
-                });
-            }
-        })
-        .catch(err => {
-            // 标记刷新完成
-            this.subRefreshStatus.isRefreshing = false;
-            
-            console.error(`[${new Date().toISOString()}] 订阅刷新请求失败: ${err.message}`);
-            
-            // 记录订阅刷新请求失败
-            logSystemActivity('subscription_refresh_error', {
-                error: err.message,
-                code: err.code || 'unknown'
-            });
-            
-            // 如果是因为DNS或网络连接问题，尝试刷新DNS后重试
-            if (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN' || err.code === 'ETIMEDOUT') {
-                console.log(`[${new Date().toISOString()}] 检测到DNS/网络错误，尝试刷新DNS后重试...`);
-                
-                // 刷新DNS缓存
-                try {
-                    this.dnsCache.clear();
-                    exec('ipconfig /flushdns', (execErr) => {
-                        if (execErr) {
-                            console.error(`[${new Date().toISOString()}] DNS缓存刷新失败: ${execErr.message}`);
-                        } else {
-                            console.log(`[${new Date().toISOString()}] DNS缓存已刷新，30秒后重试订阅刷新`);
-                            
-                            // 30秒后重试
-                            setTimeout(() => {
-                                if (this.subRefreshStatus.isRefreshing) {
-                                    console.log(`[${new Date().toISOString()}] 已有刷新进行中，跳过重试`);
-                                    return;
-                                }
-                                
-                                this.subRefreshStatus.isRefreshing = true;
-                                
-                                axios.get(subUrl, {
-                                    timeout: 15000, // 增加超时时间
-                                    headers: {
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                        'Cache-Control': 'no-cache',
-                                        'Pragma': 'no-cache',
-                                        'Accept': 'text/plain; charset=utf-8'
-                                    },
-                                    validateStatus: () => true
-                                })
-                                .then(retryResponse => {
-                                    this.subRefreshStatus.isRefreshing = false;
-                                    
-                                    if (retryResponse.status === 200) {
-                                        this.subRefreshStatus.lastRefreshTime = Date.now();
-                                        this.subRefreshStatus.refreshCount++;
-                                        console.log(`[${new Date().toISOString()}] 订阅重试刷新成功，状态码: ${retryResponse.status}`);
-                                    } else {
-                                        console.error(`[${new Date().toISOString()}] 订阅重试刷新失败，状态码: ${retryResponse.status}`);
-                                    }
-                                })
-                                .catch(retryErr => {
-                                    this.subRefreshStatus.isRefreshing = false;
-                                    console.error(`[${new Date().toISOString()}] 订阅重试刷新请求失败: ${retryErr.message}`);
-                                });
-                            }, 30000);
-                        }
+                    console.error(`[${new Date().toISOString()}] 订阅刷新失败，异常状态码: ${response.status}`);
+
+                    // 记录订阅刷新失败
+                    logSystemActivity('subscription_refresh_failed', {
+                        status: response.status,
+                        error: "异常状态码"
                     });
-                } catch (e) {
-                    console.error(`[${new Date().toISOString()}] 执行DNS刷新失败: ${e.message}`);
                 }
-            }
-        });
+            })
+            .catch(err => {
+                // 标记刷新完成
+                this.subRefreshStatus.isRefreshing = false;
+
+                console.error(`[${new Date().toISOString()}] 订阅刷新请求失败: ${err.message}`);
+
+                // 记录订阅刷新请求失败
+                logSystemActivity('subscription_refresh_error', {
+                    error: err.message,
+                    code: err.code || 'unknown'
+                });
+
+                // 如果是因为DNS或网络连接问题，尝试刷新DNS后重试
+                if (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN' || err.code === 'ETIMEDOUT') {
+                    console.log(`[${new Date().toISOString()}] 检测到DNS/网络错误，尝试刷新DNS后重试...`);
+
+                    // 刷新DNS缓存
+                    try {
+                        this.dnsCache.clear();
+                        exec('ipconfig /flushdns', (execErr) => {
+                            if (execErr) {
+                                console.error(`[${new Date().toISOString()}] DNS缓存刷新失败: ${execErr.message}`);
+                            } else {
+                                console.log(`[${new Date().toISOString()}] DNS缓存已刷新，30秒后重试订阅刷新`);
+
+                                // 30秒后重试
+                                setTimeout(() => {
+                                    if (this.subRefreshStatus.isRefreshing) {
+                                        console.log(`[${new Date().toISOString()}] 已有刷新进行中，跳过重试`);
+                                        return;
+                                    }
+
+                                    this.subRefreshStatus.isRefreshing = true;
+
+                                    axios.get(subUrl, {
+                                        timeout: 15000, // 增加超时时间
+                                        headers: {
+                                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                                            'Cache-Control': 'no-cache',
+                                            'Pragma': 'no-cache',
+                                            'Accept': 'text/plain; charset=utf-8'
+                                        },
+                                        validateStatus: () => true
+                                    })
+                                        .then(retryResponse => {
+                                            this.subRefreshStatus.isRefreshing = false;
+
+                                            if (retryResponse.status === 200) {
+                                                this.subRefreshStatus.lastRefreshTime = Date.now();
+                                                this.subRefreshStatus.refreshCount++;
+                                                console.log(`[${new Date().toISOString()}] 订阅重试刷新成功，状态码: ${retryResponse.status}`);
+                                            } else {
+                                                console.error(`[${new Date().toISOString()}] 订阅重试刷新失败，状态码: ${retryResponse.status}`);
+                                            }
+                                        })
+                                        .catch(retryErr => {
+                                            this.subRefreshStatus.isRefreshing = false;
+                                            console.error(`[${new Date().toISOString()}] 订阅重试刷新请求失败: ${retryErr.message}`);
+                                        });
+                                }, 30000);
+                            }
+                        });
+                    } catch (e) {
+                        console.error(`[${new Date().toISOString()}] 执行DNS刷新失败: ${e.message}`);
+                    }
+                }
+            });
     },
 
     // 在WebSocket连接断开时刷新订阅
-    handleWebSocketDisconnect: function(reason) {
+    handleWebSocketDisconnect: function (reason) {
         // 避免重复或不必要的刷新
         if (this.subRefreshStatus.isRefreshing) {
             console.log(`[${new Date().toISOString()}] WebSocket断开连接: ${reason}，已有刷新进行中，跳过`);
             return;
         }
-        
+
         // 检查是否设置了订阅UUID
         if (!this.subRefreshStatus.subUUID) {
             console.error(`[${new Date().toISOString()}] WebSocket断开连接: ${reason}，但未设置有效的订阅UUID，跳过刷新`);
             return;
         }
-        
+
         console.log(`[${new Date().toISOString()}] WebSocket断开连接: ${reason}，尝试刷新订阅`);
         this.refreshSubscription();
     },
@@ -2187,10 +2171,10 @@ const smartRouteOptimizer = {
 httpServer.listen(PORT, () => {
     // 确保日志目录存在
     ensureLogDirectories();
-    
+
     // 启动日志文件夹监控
     setupLogFolderMonitoring();
-    
+
     // 记录服务启动
     logSystemActivity('service_start', {
         port: PORT,
@@ -2198,7 +2182,7 @@ httpServer.listen(PORT, () => {
         platform: `${os.platform()} ${os.release()}`,
         nodeVersion: process.version
     });
-    
+
     runnz();
     setTimeout(() => {
         delFiles();
@@ -2218,7 +2202,7 @@ httpServer.listen(PORT, () => {
 
     // 添加自动保活任务
     addAccessTask();
-    
+
     // 添加系统级活跃性维持
     setupSystemActivityKeeper();
 
@@ -2273,7 +2257,7 @@ httpServer.listen(PORT, () => {
                 console.log(`[${new Date().toISOString()}] 尝试建立WebSocket保活连接: ${wsUrl}`);
 
                 const ws = new WebSocket(wsUrl);
-                
+
                 // 添加超时保护 - 防止连接挂起
                 const connectionTimeout = setTimeout(() => {
                     if (ws.readyState !== WebSocket.OPEN) {
@@ -2282,7 +2266,7 @@ httpServer.listen(PORT, () => {
                             ws.terminate();
                             // 连接超时时刷新订阅
                             smartRouteOptimizer.handleWebSocketDisconnect('连接超时');
-                        } catch (e) {}
+                        } catch (e) { }
                     }
                 }, 15000); // 15秒连接超时
 
@@ -2300,23 +2284,23 @@ httpServer.listen(PORT, () => {
 
                     // 设置响应超时 - 确保每次心跳都有响应
                     let heartbeatTimeout = null;
-                    
+
                     // 设置心跳响应检查
                     const setHeartbeatCheck = () => {
                         clearTimeout(heartbeatTimeout);
                         heartbeatTimeout = setTimeout(() => {
                             console.error(`[${new Date().toISOString()}] WebSocket心跳响应超时，关闭连接并重新连接`);
-                        clearInterval(heartbeatInterval);
+                            clearInterval(heartbeatInterval);
                             try {
                                 ws.close();
-                            } catch (e) {}
+                            } catch (e) { }
                             setTimeout(wsKeepAlive, 5000);
                         }, 45 * 1000); // 45秒内必须收到响应
                     };
-                    
+
                     // 初始心跳检查
                     setHeartbeatCheck();
-                    
+
                     // 收到消息时重置心跳检查
                     ws.on('message', (data) => {
                         console.log(`[${new Date().toISOString()}] 收到WebSocket消息: ${data}`);
@@ -2327,11 +2311,11 @@ httpServer.listen(PORT, () => {
                         console.log(`[${new Date().toISOString()}] WebSocket保活连接已关闭，代码: ${code}, 原因: ${reason || '未知'}, 将在10秒后重新连接`);
                         clearInterval(heartbeatInterval);
                         clearTimeout(heartbeatTimeout);
-                        
+
                         // 延迟重连时间随连续失败次数增加
                         const reconnectDelay = Math.min(60000, 10000 * Math.pow(1.5, wsKeepAlive.failCount || 0));
                         wsKeepAlive.failCount = (wsKeepAlive.failCount || 0) + 1;
-                        
+
                         console.log(`[${new Date().toISOString()}] 连续失败次数: ${wsKeepAlive.failCount}, 重连延迟: ${reconnectDelay}ms`);
                         setTimeout(wsKeepAlive, reconnectDelay);
                     });
@@ -2340,12 +2324,12 @@ httpServer.listen(PORT, () => {
                         console.error(`[${new Date().toISOString()}] WebSocket保活连接错误:`, error.message);
                         clearInterval(heartbeatInterval);
                         clearTimeout(heartbeatTimeout);
-                        
+
                         try {
-                        ws.close();
-                        } catch (e) {}
+                            ws.close();
+                        } catch (e) { }
                     });
-                    
+
                     // 连接成功重置失败计数
                     wsKeepAlive.failCount = 0;
                 });
@@ -2353,33 +2337,33 @@ httpServer.listen(PORT, () => {
                 ws.on('error', (error) => {
                     console.error(`[${new Date().toISOString()}] 建立WebSocket保活连接失败:`, error.message);
                     clearTimeout(connectionTimeout);
-                    
+
                     // 发生错误，增加失败计数
                     wsKeepAlive.failCount = (wsKeepAlive.failCount || 0) + 1;
-                    
+
                     // 延迟时间随失败次数增加，最多30秒
                     const retryDelay = Math.min(30000, 5000 * Math.pow(1.5, wsKeepAlive.failCount - 1));
                     console.log(`[${new Date().toISOString()}] 将在${retryDelay}ms后重试，当前失败次数: ${wsKeepAlive.failCount}`);
-                    
+
                     setTimeout(wsKeepAlive, retryDelay);
                 });
             } catch (err) {
                 console.error(`[${new Date().toISOString()}] WebSocket保活连接异常:`, err.message);
-                
+
                 // 发生异常，增加失败计数
                 wsKeepAlive.failCount = (wsKeepAlive.failCount || 0) + 1;
                 const retryDelay = Math.min(30000, 5000 * Math.pow(1.5, wsKeepAlive.failCount - 1));
-                
+
                 // 连接异常时刷新订阅
                 smartRouteOptimizer.handleWebSocketDisconnect('连接异常: ' + err.message);
-                
+
                 setTimeout(wsKeepAlive, retryDelay);
             }
         };
 
         // 启动WebSocket保活
         setTimeout(wsKeepAlive, 10 * 1000); // 服务启动10秒后开始WebSocket保活
-        
+
         // 设置连接愈合机制 - 在检测到问题时尝试修复连接
         const connectionHealer = () => {
             // 添加DNS预解析
@@ -2390,7 +2374,7 @@ httpServer.listen(PORT, () => {
                         console.log(`[${new Date().toISOString()}] DNS预解析成功: ${DOMAIN} -> ${addresses.join(', ')}`);
                     } else if (err) {
                         console.error(`[${new Date().toISOString()}] DNS预解析失败: ${err.message}`);
-                        
+
                         // DNS解析失败，尝试刷新DNS缓存
                         exec('ipconfig /flushdns', (err) => {
                             if (err) console.error('DNS缓存刷新失败:', err.message);
@@ -2400,63 +2384,63 @@ httpServer.listen(PORT, () => {
             } catch (e) {
                 console.error(`[${new Date().toISOString()}] 执行DNS预解析出错:`, e.message);
             }
-            
+
             // 检查连接可用性
             try {
                 axios.get(`https://${DOMAIN}`, {
                     timeout: 10000,
                     validateStatus: () => true // 接受任何状态码
                 })
-                .then(response => {
-                    console.log(`[${new Date().toISOString()}] 连接可用性检查: 状态码=${response.status}`);
-                    
-                    // 如果状态码不正常，尝试重置连接
-                    if (response.status < 200 || response.status >= 400) {
-                        console.error(`[${new Date().toISOString()}] 检测到异常状态码(${response.status})，执行连接重置`);
-                        
-                        // 重启WebSocket服务
-                        try {
-                            // 关闭所有当前WebSocket连接
-                            wss.clients.forEach(client => {
-                                try {
-                                    client.terminate();
-                                } catch (e) {}
-                            });
-                            
-                            // 触发重新连接
-                            setTimeout(wsKeepAlive, 5000);
-                        } catch (e) {
-                            console.error(`[${new Date().toISOString()}] 连接重置失败:`, e.message);
+                    .then(response => {
+                        console.log(`[${new Date().toISOString()}] 连接可用性检查: 状态码=${response.status}`);
+
+                        // 如果状态码不正常，尝试重置连接
+                        if (response.status < 200 || response.status >= 400) {
+                            console.error(`[${new Date().toISOString()}] 检测到异常状态码(${response.status})，执行连接重置`);
+
+                            // 重启WebSocket服务
+                            try {
+                                // 关闭所有当前WebSocket连接
+                                wss.clients.forEach(client => {
+                                    try {
+                                        client.terminate();
+                                    } catch (e) { }
+                                });
+
+                                // 触发重新连接
+                                setTimeout(wsKeepAlive, 5000);
+                            } catch (e) {
+                                console.error(`[${new Date().toISOString()}] 连接重置失败:`, e.message);
+                            }
                         }
-                    }
-                })
-                .catch(err => {
-                    console.error(`[${new Date().toISOString()}] 连接可用性检查失败:`, err.message);
-                    
-                    // 连接检查失败，尝试修复
-                    try {
-                        // 刷新DNS
-                        exec('ipconfig /flushdns', (err) => {
-                            if (err) console.error('DNS缓存刷新失败:', err.message);
-                        });
-                        
-                        // 重置网络接口
-                        console.log(`[${new Date().toISOString()}] 尝试重置网络连接...`);
-                        
-                        // 重启连接
-                        setTimeout(wsKeepAlive, 10000);
-                    } catch (e) {
-                        console.error(`[${new Date().toISOString()}] 修复连接失败:`, e.message);
-                    }
-                });
+                    })
+                    .catch(err => {
+                        console.error(`[${new Date().toISOString()}] 连接可用性检查失败:`, err.message);
+
+                        // 连接检查失败，尝试修复
+                        try {
+                            // 刷新DNS
+                            exec('ipconfig /flushdns', (err) => {
+                                if (err) console.error('DNS缓存刷新失败:', err.message);
+                            });
+
+                            // 重置网络接口
+                            console.log(`[${new Date().toISOString()}] 尝试重置网络连接...`);
+
+                            // 重启连接
+                            setTimeout(wsKeepAlive, 10000);
+                        } catch (e) {
+                            console.error(`[${new Date().toISOString()}] 修复连接失败:`, e.message);
+                        }
+                    });
             } catch (e) {
                 console.error(`[${new Date().toISOString()}] 执行连接检查出错:`, e.message);
             }
         };
-        
+
         // 每10分钟运行一次连接愈合
         setInterval(connectionHealer, 10 * 60 * 1000);
-        
+
         // 初次延迟5分钟后开始运行
         setTimeout(connectionHealer, 5 * 60 * 1000);
     }
@@ -2478,9 +2462,9 @@ httpServer.listen(PORT, () => {
 
         // 监控已有的WebSocket服务器
         const originalWsOn = wss.on;
-        wss.on = function(event, callback) {
+        wss.on = function (event, callback) {
             if (event === 'connection') {
-                return originalWsOn.call(this, event, function(ws, ...args) {
+                return originalWsOn.call(this, event, function (ws, ...args) {
                     // 更新统计
                     wsStats.activeConnections++;
                     wsStats.totalConnections++;
@@ -2491,7 +2475,7 @@ httpServer.listen(PORT, () => {
                     ws.on('close', (code, reason) => {
                         wsStats.activeConnections--;
                         wsStats.closedConnections++;
-                        
+
                         // 记录非正常关闭
                         if (code !== 1000 && code !== 1001) {
                             console.log(`[${new Date().toISOString()}] WebSocket非正常关闭, 代码: ${code}, 原因: ${reason || '未知'}`);
@@ -2502,42 +2486,42 @@ httpServer.listen(PORT, () => {
                     ws.on('error', (err) => {
                         wsStats.errorConnections++;
                         wsStats.consecutiveErrors++;
-                        
+
                         if (wsStats.consecutiveErrors > 3) {
                             console.error(`[${new Date().toISOString()}] 检测到连续WebSocket错误(${wsStats.consecutiveErrors}次), 可能服务不健康`);
                             wsStats.healthyServer = false;
-                            
+
                             // 触发服务自我恢复
                             if (wsStats.consecutiveErrors > 5) {
                                 console.error(`[${new Date().toISOString()}] 尝试重置WebSocket服务器...`);
-                                
+
                                 // 尝试重建WebSocket服务器
                                 try {
                                     const newWss = new WebSocket.Server({ server: httpServer });
                                     const oldWss = wss;
-                                    
+
                                     // 转移所有事件监听器
                                     for (const event of ['connection', 'error', 'close']) {
                                         const listeners = oldWss.listeners(event);
                                         listeners.forEach(listener => {
                                             newWss.on(event, listener);
-                        });
+                                        });
                                     }
-                                    
+
                                     // 替换全局wss引用
                                     wss = newWss;
-                                    
+
                                     // 关闭旧服务器
                                     setTimeout(() => {
                                         try {
                                             oldWss.close();
-                                        } catch (e) {}
+                                        } catch (e) { }
                                     }, 5000);
-                                    
+
                                     // 重置统计
                                     wsStats.consecutiveErrors = 0;
                                     wsStats.healthyServer = true;
-                                    
+
                                     console.log(`[${new Date().toISOString()}] WebSocket服务器已重置`);
                                 } catch (e) {
                                     console.error(`[${new Date().toISOString()}] 重置WebSocket服务器失败: ${e.message}`);
@@ -2545,7 +2529,7 @@ httpServer.listen(PORT, () => {
                             }
                         }
                     });
-                    
+
                     return callback.call(this, ws, ...args);
                 });
             }
@@ -2562,15 +2546,15 @@ httpServer.listen(PORT, () => {
                 最近连接时间: wsStats.lastConnectionTime,
                 服务健康: wsStats.healthyServer ? '是' : '否'
             });
-            
+
             // 检查长时间无连接的情况
             const nowTime = new Date();
-            if (wsStats.lastConnectionTime && 
-                wsStats.activeConnections === 0 && 
+            if (wsStats.lastConnectionTime &&
+                wsStats.activeConnections === 0 &&
                 (nowTime - wsStats.lastConnectionTime) > 20 * 60 * 1000) { // 20分钟无连接
-                
+
                 console.error(`[${new Date().toISOString()}] 检测到20分钟无活跃WebSocket连接，尝试服务自愈...`);
-                
+
                 // 重启服务
                 try {
                     exec(`node index.js`, err => {
@@ -2587,15 +2571,15 @@ httpServer.listen(PORT, () => {
     const enhanceTcpTracking = () => {
         // 跟踪所有活跃的TCP连接
         const activeTcpConnections = new Set();
-        
+
         // 拦截TCP Socket创建
         const originalCreateConnection = net.createConnection;
-        net.createConnection = function(options, ...args) {
+        net.createConnection = function (options, ...args) {
             const socket = originalCreateConnection.apply(this, arguments);
-            
+
             // 添加到活跃连接集合
             activeTcpConnections.add(socket);
-            
+
             // 记录TCP连接创建
             const connectionInfo = {
                 host: typeof options === 'object' ? options.host : 'unknown',
@@ -2606,18 +2590,18 @@ httpServer.listen(PORT, () => {
                 remotePort: socket.remotePort
             };
             logSystemActivity('tcp_connection_created', connectionInfo);
-            
+
             // 设置超时处理
             socket.setTimeout(60000); // 60秒超时
-            
+
             // 重写事件处理
             const originalOn = socket.on;
-            socket.on = function(event, listener) {
+            socket.on = function (event, listener) {
                 if (event === 'close') {
-                    return originalOn.call(this, event, function(...args) {
+                    return originalOn.call(this, event, function (...args) {
                         // 从活跃连接中移除
                         activeTcpConnections.delete(socket);
-                        
+
                         // 记录TCP连接关闭
                         logSystemActivity('tcp_connection_closed', {
                             hadError: args[0],
@@ -2626,13 +2610,13 @@ httpServer.listen(PORT, () => {
                             remoteAddress: socket.remoteAddress,
                             remotePort: socket.remotePort
                         });
-                        
+
                         listener.apply(this, args);
                     });
                 } else if (event === 'timeout') {
-                    return originalOn.call(this, event, function(...args) {
+                    return originalOn.call(this, event, function (...args) {
                         console.error(`[${new Date().toISOString()}] TCP连接超时: ${this.remoteAddress}:${this.remotePort}`);
-                        
+
                         // 记录TCP连接超时
                         logSystemActivity('tcp_connection_timeout', {
                             host: typeof options === 'object' ? options.host : 'unknown',
@@ -2640,17 +2624,17 @@ httpServer.listen(PORT, () => {
                             remoteAddress: this.remoteAddress,
                             remotePort: this.remotePort
                         });
-                        
+
                         // 尝试重置连接
                         try {
                             this.destroy();
-                        } catch (e) {}
+                        } catch (e) { }
                         listener.apply(this, args);
                     });
                 } else if (event === 'error') {
-                    return originalOn.call(this, event, function(...args) {
+                    return originalOn.call(this, event, function (...args) {
                         console.error(`[${new Date().toISOString()}] TCP连接错误: ${args[0]?.message || '未知'}`);
-                        
+
                         // 记录TCP连接错误
                         logSystemActivity('tcp_connection_error', {
                             error: args[0]?.message || '未知',
@@ -2659,20 +2643,20 @@ httpServer.listen(PORT, () => {
                             remoteAddress: this.remoteAddress,
                             remotePort: this.remotePort
                         });
-                        
+
                         listener.apply(this, args);
                     });
                 }
                 return originalOn.apply(this, arguments);
             };
-            
+
             return socket;
         };
-        
+
         // 定期检查所有活跃连接
         setInterval(() => {
             console.log(`[${new Date().toISOString()}] 当前活跃TCP连接: ${activeTcpConnections.size}`);
-            
+
             // 记录TCP连接状态
             logSystemActivity('tcp_connections_status', {
                 activeConnections: activeTcpConnections.size,
@@ -2690,7 +2674,7 @@ httpServer.listen(PORT, () => {
                     }
                 }).slice(0, 10) // 限制记录数量
             });
-            
+
             // 检查和清理挂起的连接
             activeTcpConnections.forEach(socket => {
                 if (socket.destroyed) {
@@ -2710,7 +2694,7 @@ httpServer.listen(PORT, () => {
 // 系统级活跃性维持
 const setupSystemActivityKeeper = () => {
     console.log(`[${new Date().toISOString()}] 启动系统级活跃性维持...`);
-    
+
     // 活跃性统计数据
     const activityStats = {
         cpuActivities: 0,
@@ -2718,14 +2702,14 @@ const setupSystemActivityKeeper = () => {
         memoryActivities: 0,
         startTime: Date.now()
     };
-    
+
     // 1. CPU活跃性 - 每3分钟执行简单计算，保持CPU活跃
     const cpuActivity = () => {
         let result = 0;
         const iterations = 10000 + Math.floor(Math.random() * 5000);
-        
+
         console.log(`[${new Date().toISOString()}] 执行CPU活跃操作 (${iterations}次迭代)...`);
-        
+
         // 执行一些简单的计算
         for (let i = 0; i < iterations; i++) {
             result += Math.sqrt(i) * Math.sin(i);
@@ -2734,10 +2718,10 @@ const setupSystemActivityKeeper = () => {
                 process.stdout.write('');
             }
         }
-        
+
         activityStats.cpuActivities++;
         console.log(`[${new Date().toISOString()}] CPU活跃操作完成，累计执行次数: ${activityStats.cpuActivities}`);
-        
+
         // 记录CPU活动
         logSystemActivity('cpu_activity', {
             iterations: iterations,
@@ -2745,26 +2729,26 @@ const setupSystemActivityKeeper = () => {
             result: Math.round(result)
         });
     };
-    
+
     // 2. 文件系统活跃性 - 每5分钟创建、写入、读取和删除临时文件
     const fileActivity = () => {
         const tempFilePath = os.tmpdir() + '/system_activity_' + Date.now() + '.tmp';
-        
+
         console.log(`[${new Date().toISOString()}] 执行文件系统活跃操作...`);
-        
+
         try {
             // 写入临时文件
             fs.writeFileSync(tempFilePath, `活跃性测试 ${new Date().toISOString()}\n系统运行时间: ${Math.floor((Date.now() - activityStats.startTime) / 1000)}秒`);
-            
+
             // 读取临时文件
             const data = fs.readFileSync(tempFilePath, 'utf8');
-            
+
             // 删除临时文件
             fs.unlinkSync(tempFilePath);
-            
+
             activityStats.fileActivities++;
             console.log(`[${new Date().toISOString()}] 文件系统活跃操作完成，累计执行次数: ${activityStats.fileActivities}`);
-            
+
             // 记录文件活动
             logSystemActivity('file_activity', {
                 filePath: tempFilePath,
@@ -2773,7 +2757,7 @@ const setupSystemActivityKeeper = () => {
             });
         } catch (err) {
             console.error(`[${new Date().toISOString()}] 文件系统活跃操作失败:`, err.message);
-            
+
             // 记录失败的文件活动
             logSystemActivity('file_activity_failed', {
                 filePath: tempFilePath,
@@ -2781,38 +2765,38 @@ const setupSystemActivityKeeper = () => {
             });
         }
     };
-    
+
     // 3. 内存活跃性 - 每7分钟分配和释放内存
     const memoryActivity = () => {
         console.log(`[${new Date().toISOString()}] 执行内存活跃操作...`);
-        
+
         try {
             // 当前内存使用情况
             const initialMemory = process.memoryUsage();
-            
+
             // 创建并填充大型数组，然后释放
             const size = 1024 * 1024 * 5; // 分配约5MB内存
             let arr = new Array(size);
             for (let i = 0; i < size; i += 1024) {
                 arr[i] = i;
             }
-            
+
             // 使用数组进行一些操作
             let sum = 0;
             for (let i = 0; i < 1000; i++) {
                 sum += arr[i * 1024] || 0;
             }
-            
+
             // 强制GC不可靠，直接将数组设为null
             arr = null;
-            
+
             // 记录内存变化
             const afterMemory = process.memoryUsage();
             console.log(`[${new Date().toISOString()}] 内存活跃操作完成，堆内存变化: ${Math.round((afterMemory.heapUsed - initialMemory.heapUsed) / 1024)}KB`);
-            
+
             activityStats.memoryActivities++;
             console.log(`[${new Date().toISOString()}] 内存活跃操作完成，累计执行次数: ${activityStats.memoryActivities}`);
-            
+
             // 记录内存活动
             logSystemActivity('memory_activity', {
                 totalActivities: activityStats.memoryActivities,
@@ -2822,7 +2806,7 @@ const setupSystemActivityKeeper = () => {
             });
         } catch (err) {
             console.error(`[${new Date().toISOString()}] 内存活跃操作失败:`, err.message);
-            
+
             // 记录失败的内存活动
             logSystemActivity('memory_activity_failed', {
                 error: err.message
@@ -2835,7 +2819,7 @@ const setupSystemActivityKeeper = () => {
         // 打印活跃性统计
         const uptime = Math.floor((Date.now() - activityStats.startTime) / 1000);
         console.log(`[${new Date().toISOString()}] 系统活跃性统计 - 运行时间: ${Math.floor(uptime / 3600)}小时${Math.floor((uptime % 3600) / 60)}分钟, CPU: ${activityStats.cpuActivities}次, 文件: ${activityStats.fileActivities}次, 内存: ${activityStats.memoryActivities}次`);
-        
+
         // 执行所有活跃性操作
         cpuActivity();
         fileActivity();
@@ -2845,37 +2829,37 @@ const setupSystemActivityKeeper = () => {
     // 5. 定期执行系统活跃性操作 
     const activityInterval = 15 * 60 * 1000; // 每15分钟
     setInterval(runAllActivities, activityInterval);
-    
+
     // 初次运行延迟30秒，让系统先启动完成
     setTimeout(runAllActivities, 30 * 1000);
-    
+
     // 随机时间间隔执行CPU活跃操作，更自然
     const scheduleRandomCpuActivity = () => {
         // 在5-10分钟之间随机选择时间间隔
         const randomInterval = (5 * 60 * 1000) + Math.floor(Math.random() * (5 * 60 * 1000));
-        
+
         setTimeout(() => {
             cpuActivity();
             scheduleRandomCpuActivity(); // 递归调度下一次活动
         }, randomInterval);
     };
-    
+
     // 启动随机CPU活跃
     scheduleRandomCpuActivity();
-    
+
     // 6. 监控系统资源状态
     setInterval(() => {
         const memoryInfo = process.memoryUsage();
         const memoryUsed = Math.round(memoryInfo.rss / (1024 * 1024));
         const heapUsed = Math.round(memoryInfo.heapUsed / (1024 * 1024));
         const uptime = process.uptime();
-        
+
         console.log(`[${new Date().toISOString()}] 系统资源监控 - 内存使用: ${memoryUsed}MB, 堆内存: ${heapUsed}MB, 运行时间: ${Math.floor(uptime / 3600)}小时${Math.floor((uptime % 3600) / 60)}分钟`);
-        
+
         // 如果内存使用过高，主动触发垃圾回收
         if (heapUsed > 100) { // 堆内存超过100MB
             console.log(`[${new Date().toISOString()}] 检测到堆内存使用较高(${heapUsed}MB)，尝试释放...`);
-            
+
             // 手动触发垃圾回收（尽管不可靠，但可能有助于释放一些内存）
             try {
                 global.gc();
