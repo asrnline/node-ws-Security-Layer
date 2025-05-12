@@ -1,8 +1,7 @@
 # 安装  
 
 ```bash 
-curl -Ls https://raw.githubusercontent.com/asrnline
-/node-ws-Security-Layer/refs/heads/main/setup.sh | bash -s yourdomain
+curl -Ls https://raw.githubusercontent.com/asrnline/node-ws-Security-Layer/refs/heads/main/setup.sh | bash -s yourdomain
 ```
 
 # Node-ws说明
