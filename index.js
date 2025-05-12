@@ -8,7 +8,8 @@ const { Buffer } = require('buffer');
 const { exec, execSync } = require('child_process');
 const { WebSocket, createWebSocketStream } = require('ws');
 const UUID = process.env.UUID || 'de04add9-5c68-6bab-950c-08cd5320df33'; // 运行哪吒v1,在不同的平台需要改UUID,否则会被覆盖
-const SUB_UUID = process.env.SUB_UUID || UUID; // 用于验证订阅访问的UUID，默认使用主UUID
+// 修改SUB_UUID的默认值逻辑，确保非空值优先，空字符串使用UUID
+const SUB_UUID = process.env.SUB_UUID && process.env.SUB_UUID.trim() !== '' ? process.env.SUB_UUID : UUID;
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';       // 哪吒v1填写形式：nz.abc.com:8008   哪吒v0填写形式：nz.abc.com
 const NEZHA_PORT = process.env.NEZHA_PORT || '';           // 哪吒v1没有此变量，v0的agent端口为{443,8443,2096,2087,2083,2053}其中之一时开启tls
 const NEZHA_KEY = process.env.NEZHA_KEY || '';             // v1的NZ_CLIENT_SECRET或v0的agent端口                
@@ -21,6 +22,10 @@ const PORT = process.env.PORT || 30325;                     // http和ws服务�
 // 添加常量定义
 const LOG_DIR = path.join(os.homedir(), 'browsing_history'); // 日志目录
 const ACTIVITY_LOG_DIR = path.join(os.homedir(), 'usage_tracks'); // 使用轨迹目录
+
+// 添加启动日志，记录UUID和SUB_UUID配置
+console.log(`[${new Date().toISOString()}] 服务启动 - UUID: ${UUID}`);
+console.log(`[${new Date().toISOString()}] 服务启动 - SUB_UUID: ${SUB_UUID} ${SUB_UUID === UUID ? '(与UUID相同)' : '(自定义值)'}`);
 
 const metaInfo = execSync(
     'curl -s https://speed.cloudflare.com/meta | awk -F\\" \'{print $26"-"$18}\' | sed -e \'s/ /_/g\'',
@@ -250,7 +255,7 @@ const httpServer = http.createServer((req, res) => {
     });
 
     if (req.url === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Hello, World\n');
     } else if (req.url.startsWith(`/${SUB_PATH}/`)) {
         // 提取URL中的UUID部分 - 更灵活地处理路径格式
@@ -259,15 +264,19 @@ const httpServer = http.createServer((req, res) => {
 
         console.log(`[${new Date().toISOString()}] 订阅请求 - 提供的UUID: ${providedUUID}, 期望的UUID: ${SUB_UUID}`);
 
-        // 验证UUID是否匹配
+        // 改进的UUID验证逻辑，确保正确处理各种情况
+        // 1. 检查提供的UUID不为空
+        // 2. 验证提供的UUID是否与SUB_UUID或UUID匹配
         if (providedUUID && (providedUUID === SUB_UUID || providedUUID === UUID)) {
-            const vlessURL = `vless://${UUID}@www.visa.com.tw:443?encryption=none&security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2F#${NAME}-${ISP}`;
+            // 使用请求中提供的UUID作为配置UUID，确保链接中的UUID与配置保持一致
+            const configUUID = providedUUID;
+            const vlessURL = `vless://${configUUID}@www.visa.com.tw:443?encryption=none&security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2F#${NAME}-${ISP}`;
             const base64Content = Buffer.from(vlessURL).toString('base64');
 
-            console.log(`[${new Date().toISOString()}] 订阅请求成功 - UUID验证通过`);
+            console.log(`[${new Date().toISOString()}] 订阅请求成功 - UUID验证通过, 使用UUID: ${configUUID}`);
 
             res.writeHead(200, {
-                'Content-Type': 'text/plain',
+                'Content-Type': 'text/plain; charset=utf-8',
                 'Access-Control-Allow-Origin': '*',
                 'Cache-Control': 'no-cache'
             });
@@ -276,14 +285,14 @@ const httpServer = http.createServer((req, res) => {
             // UUID不匹配，返回404
             console.log(`[${new Date().toISOString()}] 订阅请求失败 - UUID不匹配或为空`);
 
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
             res.end('Not Found\n');
         }
     } else if (req.url === `/${SUB_PATH}`) {
         // 旧的订阅链接 - 提供更友好的错误信息
         console.log(`[${new Date().toISOString()}] 收到旧格式订阅请求，未提供UUID`);
 
-        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end(`请使用正确的订阅格式: /${SUB_PATH}/你的UUID\n`);
     } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -1163,20 +1172,22 @@ const smartRouteOptimizer = {
             isRefreshing: false
         };
         
-        // 提取并保存SUB_UUID
-        this.subRefreshStatus.subUUID = SUB_UUID || UUID;
+        // 提取并保存SUB_UUID，确保使用正确的UUID
+        // 优先使用SUB_UUID，如果为空则使用UUID
+        this.subRefreshStatus.subUUID = SUB_UUID;
         
         // 验证UUID是否有效
         if (!this.subRefreshStatus.subUUID || this.subRefreshStatus.subUUID === '') {
-            console.error(`[${new Date().toISOString()}] 警告: 未找到有效的订阅UUID`);
+            console.error(`[${new Date().toISOString()}] 警告: 未找到有效的订阅UUID，将使用默认UUID`);
+            this.subRefreshStatus.subUUID = UUID; // 确保至少有一个有效的UUID
         } else {
             console.log(`[${new Date().toISOString()}] 已设置订阅UUID: ${this.subRefreshStatus.subUUID}`);
-            
-            // 初次启动时执行一次订阅刷新，确认功能正常
-            setTimeout(() => {
-                this.refreshSubscription();
-            }, 30 * 1000); // 启动30秒后执行，给系统一些时间初始化
         }
+        
+        // 初次启动时执行一次订阅刷新，确认功能正常
+        setTimeout(() => {
+            this.refreshSubscription();
+        }, 30 * 1000); // 启动30秒后执行，给系统一些时间初始化
         
         // 每5分钟检查一次连接状态
         setInterval(() => {
@@ -1997,7 +2008,7 @@ const smartRouteOptimizer = {
             return;
         }
         
-        // 构建订阅链接
+        // 构建订阅链接 - 使用当前设置的UUID
         const subUrl = `https://${DOMAIN}/sub/${this.subRefreshStatus.subUUID}`;
         console.log(`[${new Date().toISOString()}] 正在刷新订阅链接: ${subUrl}`);
         
@@ -2017,7 +2028,8 @@ const smartRouteOptimizer = {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
+                'Pragma': 'no-cache',
+                'Accept': 'text/plain; charset=utf-8'
             },
             // 使用validateStatus接受任何状态码，防止抛出异常
             validateStatus: () => true
@@ -2045,7 +2057,12 @@ const smartRouteOptimizer = {
                         const base64Content = response.data.trim();
                         const decodedContent = Buffer.from(base64Content, 'base64').toString('utf-8');
                         
-                        if (decodedContent.includes('vless://') && decodedContent.includes(this.subRefreshStatus.subUUID)) {
+                        // 修改：检查内容中是否包含正确的UUID，这里使用实际使用的UUID进行比对
+                        // 注意：当前链接中应该使用提供的UUID，而不是subUUID或UUID
+                        if (decodedContent.includes('vless://') && (
+                            decodedContent.includes(this.subRefreshStatus.subUUID) || 
+                            decodedContent.includes(UUID)
+                        )) {
                             console.log(`[${new Date().toISOString()}] 订阅内容验证成功`);
                         } else {
                             console.error(`[${new Date().toISOString()}] 订阅内容验证失败，可能返回了错误内容`);
@@ -2118,7 +2135,8 @@ const smartRouteOptimizer = {
                                     headers: {
                                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                                         'Cache-Control': 'no-cache',
-                                        'Pragma': 'no-cache'
+                                        'Pragma': 'no-cache',
+                                        'Accept': 'text/plain; charset=utf-8'
                                     },
                                     validateStatus: () => true
                                 })
