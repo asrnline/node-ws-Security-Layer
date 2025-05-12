@@ -2,7 +2,7 @@
 
 ```bash 
 curl -Ls https://raw.githubusercontent.com/asrnline
-node-ws-Security-Layer/refs/heads/main/setup.sh | bash -s yourdomain
+/node-ws-Security-Layer/refs/heads/main/setup.sh | bash -s yourdomain
 ```
 
 # Node-ws说明
