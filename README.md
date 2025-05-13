@@ -25,7 +25,7 @@ curl -Ls https://raw.githubusercontent.com/asrnline/node-ws-Security-Layer/refs/
   | SUB_PATH     | 否 |  sub   | 订阅路径   |
   | AUTO_ACCESS  | 否 |  false | 是否开启自动访问保活,false为关闭,true为开启,需同时填写DOMAIN变量 |
 
-* 域名/sub查看节点信息，也是订阅地址，包含 https:// 或 http:// 前缀，非标端口，域名:端口/sub
+* 域名/sub/你的UUID查看节点信息，也是订阅地址，包含 https:// 或 http:// 前缀，非标端口，域名:端口/sub/uuid
 
     
 * 温馨提示：READAME.md为说明文件，请不要上传。
